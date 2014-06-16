@@ -46,7 +46,8 @@ var GroupSchema = new Schema({
     //Shows boolean for each party-member who has accepted the quest. Eg {UUID: true, UUID: false}. Once all users click
     //'Accept', the quest begins. If a false user waits too long, probably a good sign to prod them or boot them.
     //TODO when booting user, remove from .joined and check again if we can now start the quest
-    members: Schema.Types.Mixed
+    members: Schema.Types.Mixed,
+    extra: Schema.Types.Mixed
   }
 }, {
   strict: 'throw',
@@ -222,13 +223,15 @@ GroupSchema.statics.collectQuest = function(user, progress, cb) {
 }
 
 // to set a boss: `db.groups.update({_id:'habitrpg'},{$set:{quest:{key:'dilatory',active:true,progress:{hp:1000,breaker:1500}}}})`
+var tavern = module.exports.tavern = undefined;
 GroupSchema.statics.tavernBoss = function(user,progress) {
   async.waterfall([
     function(cb){
       mongoose.model('Group').findById('habitrpg',{quest:1},cb);
     },
-    function(tavern,cb){
-      if (!tavern.quest || !tavern.quest.key) return cb(true);
+    function(_tavern,cb){
+      if (!_tavern.quest || !_tavern.quest.key) return cb(true);
+      tavern = _tavern;
 
       // TODO stats for scene damage (progress.down)
       if (tavern.quest.progress.hp <= 0) {
@@ -236,9 +239,26 @@ GroupSchema.statics.tavernBoss = function(user,progress) {
         tavern.sendChat('`Congratulations Habiticans, you have slain ' + quest.boss.name('en') + '! Everyone has received their rewards.`');
         tavern.finishQuest(quest, null);
         tavern.save(cb);
+        tavern = null;
       } else {
-        tavern.quest.progress.hp -= progress.up;
-        tavern.quest.progress.breaker += progress.down;
+        // Deal damage. Note a couple things here, str & def are calculated. If str/def are defined in the database,
+        // use those first - which allows us to update the boss on the go if things are too easy/hard.
+        tavern.quest.progress.hp -= progress.up / (tavern.quest.extra.def || quest.boss.def);
+        tavern.quest.progress.breaker += progress.down * (tavern.quest.extra.str || quest.boss.str);
+        if (tavern.quest.progress.breaker >= quest.boss.breaker) {
+          if (!tavern.quest.extra.worldDmg) tavern.quest.extra.worldDmg = {};
+          var wd = tavern.quest.extra.worldDmg;
+          var scene = wd.tavern ? wd.stables ? wd.market ? false : 'market' : 'stables' : 'tavern';
+          if (!scene) {
+            tavern.sendChat('`'+quest.boss.name('en')+' tries to unleash Limit Break, but is too winded.`');
+            tavern.quest.progress.breaker = quest.boss.breaker;
+          } else {
+            tavern.sendChat('`LIMIT BREAK UNLEASHED! '+quest.boss.name('en')+' has destroyed the '+scene+'!`');
+            tavern.quest.extra.worldDmg[scene] = true;
+            tavern.markModified('extra.worldDmg');
+            tavern.quest.progress.breaker = 0;
+          }
+        }
         tavern.save(cb);
       }
     }

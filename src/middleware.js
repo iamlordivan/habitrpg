@@ -166,7 +166,8 @@ module.exports.locals = function(req, res, next) {
       return shared.i18n.t.apply(null, args);
     },
     siteVersion: siteVersion,
-    Content: shared.content
+    Content: shared.content,
+    tavern: require('./models/group').tavern // for world boss
   }
 
   next();
